@@ -29,6 +29,16 @@ while (1) {
 	 	store \%memory, 'myBrain.dat';	
 		exit 0;
 	}
+	if ($input =~ /alitabraintweak/) {
+		print("Enter new key-value pair:\n");
+		print("Enter key: ");
+		$input = <STDIN>;
+		print("\nEnter value: ");
+		$output = <STDIN>;
+		$memory{$input} = $output;
+	}
+		
+		
 	if ($memory{$input}) {
 		if ($#{$memory{$input}} > 0) {
 			$output = var_eval($memory{$input}[0]);	
