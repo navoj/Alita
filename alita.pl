@@ -21,7 +21,7 @@ my $elapsedTime;
 my $endTime;
 my $randomThought;
 my $brainSize;
-my $waitTime = 60;
+my $waitTime = 1000;
 my $i;
 my ($key, $value);
 
