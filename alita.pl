@@ -24,6 +24,7 @@ my $brainSize;
 my $waitTime = 1000;
 my $i;
 my ($key, $value);
+my $brainFile;
 
 sub var_eval {
 	local *FH;
@@ -45,9 +46,28 @@ sub timed_input {
 	return $string;
 };
 
-%memory = ();
+sub main() {
+	if ($#ARGV == 0) {
+		my $brainType = $ARGV[0];
+		print("brainType = $brainType\n");
+	} else {
+		print "Usage: alita.pl [32|64]\n";
+		exit(0);
+	}
 
-if (-e 'myBrain.dat') {
+	%memory = ();
+
+	if ($brainType <= 64) {
+		$brainFile = "myBrain32.dat";
+		print("32-bit brain\n");
+	} else {
+		$brainFile = "myBrain64.dat";
+		print("64-bit brain\n");
+	}
+
+	print("loading $brainFile...\n");
+
+if (-e $brainFile) {
 	print "Hello my name is Alita.\n";
 	%memory = %{retrieve('myBrain.dat')};
 	$brainSize = keys %memory;
@@ -125,5 +145,6 @@ while (1) {
 
 }
 
+} # end sub main
 
-
+main();
