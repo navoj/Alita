@@ -21,9 +21,9 @@ sub new {
 
     if (-e $path) {
         my $loaded = eval { retrieve($path) };
-        if ($loaded && ref $loaded eq 'HASH' && $loaded->{bigrams} && $loaded->{unigrams}) {
-            # Merge any missing keys to keep forward compatibility
-            $self->{$_} = $loaded->{$_} for keys %$loaded;
+        if ($loaded && ref($loaded) && $loaded->{bigrams} && $loaded->{unigrams}) {
+            # Accept either a plain HASH or a blessed TinyLLM object; merge keys
+            $self->{$_} = $loaded->{$_} for keys %{$loaded};
         }
     }
 
