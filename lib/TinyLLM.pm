@@ -23,7 +23,7 @@ sub new {
         my $loaded = eval { retrieve($path) };
         if ($loaded && ref $loaded eq 'HASH' && $loaded->{bigrams} && $loaded->{unigrams}) {
             # Merge any missing keys to keep forward compatibility
-            $self->{$_} = $loaded->{$_] } for keys %$loaded;
+            $self->{$_} = $loaded->{$_} for keys %$loaded;
         }
     }
 
