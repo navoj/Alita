@@ -20,6 +20,6 @@ Common commands to run from the project root:
   ```
 
 Notes:
-- The test `t/alita_conversation.t` spawns `alita.pl`, runs a short interactive session, and ensures a temporary `myBrainLLM.dat` is created and persisted across runs.
+- The test `t/alita_conversation.t` spawns `alitaLLM.pl`, runs a short interactive session, and ensures a temporary `myBrainLLM.dat` is created and persisted across runs.
 - It automatically sets `PERL5LIB` to include `lib/` so `TinyLLM` can be found.
 - The test uses a temporary working directory, so it will not modify files in your repository.

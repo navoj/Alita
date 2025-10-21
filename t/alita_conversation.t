@@ -12,9 +12,9 @@ use Time::HiRes qw(sleep time);
 
 # Determine project root and alita.pl absolute path before changing directories
 my $project_root = abs_path(getcwd());
-my $alita_path   = File::Spec->catfile($project_root, 'alita.pl');
+my $alita_path   = File::Spec->catfile($project_root, 'alitaLLM.pl');
 
-ok(-e $alita_path, 'alita.pl exists at project root');
+ok(-e $alita_path, 'alitaLLM.pl exists at project root');
 
 # Ensure TinyLLM can be found when running from a temp directory
 my $lib_path = File::Spec->catdir($project_root, 'lib');
@@ -36,7 +36,7 @@ sub run_alita_session {
 
     my $err = gensym();
     my $pid = open3(my $w, my $r, $err, $^X, $alita_path);
-    ok($pid, 'spawned alita.pl');
+    ok($pid, 'spawned alitaLLM.pl');
 
     select((select($w), $| = 1)[0]); # autoflush writer
 
