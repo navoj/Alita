@@ -32,9 +32,15 @@ print "Model: $model_path\n";
 printf "Saved file: %d bytes (%.2f KiB)\n", $stats->{file_bytes}, $stats->{file_bytes} / 1024;
 printf "Current state if saved: %d bytes (%.2f KiB)\n",
     $stats->{serialized_bytes}, $stats->{serialized_bytes} / 1024;
+printf "Model cap: %d bytes (%.2f GB, %.2f GiB)\n",
+    $stats->{max_model_bytes},
+    $stats->{max_model_bytes} / 1_000_000_000,
+    $stats->{max_model_bytes} / (1024 ** 3);
 print "TinyLLM version: $stats->{version}\n";
 print "Text: $stats->{vocabulary_size} words, $stats->{bigram_count} unique transitions, "
     . "$stats->{total_tokens} trained tokens (including boundaries)\n";
+print "Memory: $stats->{memory_count} entries; "
+    . "$stats->{knowledge_sources} unique file sources\n";
 
 if (my $classifier = $stats->{classifier}) {
     print "Classifier: $classifier->{algorithm}\n";
@@ -59,7 +65,7 @@ Usage:
   perl examples/model_info.pl [--model=PATH] [--json]
 
   --model=PATH  Existing model (default: project-root myBrainLLM.dat)
-  --json        Print machine-readable metadata, sizes, and training counts
+  --json        Print machine-readable metadata, limits, memories, and counts
   --help        Show this message
 
 Saved file size describes the file on disk. Current-state size describes what

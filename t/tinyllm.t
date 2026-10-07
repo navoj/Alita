@@ -192,6 +192,9 @@ is_deeply(
     [qw(
         bigram_count
         classifier
+        knowledge_sources
+        max_model_bytes
+        memory_count
         path
         serialized_bytes
         total_tokens

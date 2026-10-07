@@ -1,0 +1,4 @@
+These are fictional facts for the Alita local-knowledge demonstration.
+
+The Lantern workshop is hosted in Tempe, Arizona.
+The Lantern workshop begins at 10 AM and focuses on local machine learning.

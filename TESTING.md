@@ -16,6 +16,24 @@ Run the TinyLLM API tests only:
 prove -lv t/tinyllm.t
 ```
 
+Run the serialized model-limit tests only:
+
+```powershell
+prove -lv t/model_limits.t
+```
+
+Run the local recall and explicit-file agent tests only:
+
+```powershell
+prove -lv t/alita_agent.t
+```
+
+Run the bundled conversation-example tests only:
+
+```powershell
+prove -lv t/conversation_example.t
+```
+
 Run the digit command-line tests only:
 
 ```powershell
@@ -38,11 +56,29 @@ The tests use temporary directories and do not modify the checked-in
 
 ```powershell
 perl -Ilib -c lib/TinyLLM.pm
+perl -Ilib -c lib/Alita/Agent.pm
 perl -Ilib -c alitaLLM.pl
+perl -Ilib -c examples/conversation.pl
 perl -Ilib -c examples/digit_recognizer.pl
 perl -Ilib -c examples/model_info.pl
 podchecker lib/TinyLLM.pm
+podchecker lib/Alita/Agent.pm
 ```
+
+## Conversation-example smoke test
+
+Run the bundled deterministic teaching, conversation-recall, and explicit-file
+demonstration with an ignored model:
+
+```powershell
+perl examples/conversation.pl
+perl examples/model_info.pl --model="examples\alita-chat-demo.dat"
+```
+
+The example should recall Orion, report that Tempe hosts the Lantern workshop,
+and save a model with memories and one knowledge source. Repeating the command
+should report that the unchanged knowledge file was already imported. Delete
+`examples/alita-chat-demo.dat` when the smoke test is no longer needed.
 
 ## Digit-example smoke test
 

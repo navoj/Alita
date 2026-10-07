@@ -5,11 +5,11 @@ probabilistic text generation, supervised classification, and evolutionary
 programming. The actively reusable part of the project is `lib/TinyLLM.pm`.
 
 TinyLLM is intentionally small and educational. It is not a transformer or a
-large language model. It supports two independent learning modes in one saved
-model:
+large language model. One saved model can contain:
 
-- a word-bigram generator for short text experiments; and
-- a Bernoulli naive Bayes classifier for labeled numeric feature vectors.
+- a word-bigram generator for short text experiments;
+- a Bernoulli naive Bayes classifier for labeled numeric feature vectors; and
+- bounded conversation, teaching, and explicitly ingested file memories.
 
 The classifier makes the digit-recognition example genuine supervised
 classification. Trying to feed 784 pixels through the text `train`/`reply`
@@ -18,8 +18,11 @@ only one previous word.
 
 ## Project layout
 
-- `lib/TinyLLM.pm` - reusable text-generation and classification library.
-- `alitaLLM.pl` - interactive text trainer and generator backed by TinyLLM.
+- `lib/TinyLLM.pm` - reusable text, classification, memory, and persistence library.
+- `lib/Alita/Agent.pm` - local recall and explicit-file knowledge layer.
+- `alitaLLM.pl` - interactive local recall, teaching, and file-knowledge CLI.
+- `examples/conversation.pl` - self-contained teaching, recall, and explicit-file
+  demonstration.
 - `examples/digit_recognizer.pl` - trains, evaluates, and runs a handwritten
   digit classifier.
 - `examples/model_info.pl` - inspects a saved TinyLLM model without changing it.
@@ -42,6 +45,55 @@ This is useful for demonstrating tokenization, incremental counts, sampling,
 and persistence. It has only one token of context and will not behave like a
 modern chat model.
 
+### Local recall and explicit knowledge
+
+`Alita::Agent` adds bounded local memory on top of TinyLLM. It can recall
+recent conversation entries, exact question/answer teachings, and excerpts
+from text files that the user explicitly asks it to read. Taught answers and
+file excerpts are retrieved before the current question is added to the
+model's text counts.
+
+The agent's replies are deterministic retrieval results or readable canned
+guidance when nothing matches; it does not call the stochastic bigram
+generator. Chat, teaching, and file text still train TinyLLM's separate
+low-level `reply()` model. Together these provide memory plus a small bigram
+experiment, not a transformer or general free-form document reasoning. The
+agent does not browse or run commands, and file contents are treated only as
+data, never as instructions for the program to execute.
+
+Retrieval checks an exact taught prompt first. A non-exact teaching is matched
+against its prompt, not its answer, and requires at least 75% keyword coverage
+in both directions. For any multi-keyword query, a teaching or file chunk must
+share at least two meaningful keywords; a one-keyword query must share that
+one. Teaching wins a score tie with a file chunk, and the newest entry wins
+remaining ties. Recent-conversation recall also requires at least 75% coverage
+of the query keywords. Clear personal statements such as “My favorite
+constellation is Orion” receive an acknowledgement and can be recalled later;
+declarative memories take priority over repeated earlier questions. Follow-up
+phrases such as “tell me more” reuse the previous user turn to search teachings
+and file chunks rather than conversation history.
+
+TinyLLM keeps at most the latest 200 conversation-memory entries. Dropping an
+older recall entry does not subtract its cumulative text counts. Teaching and
+file memories remain until the configured model-size cap prevents another
+atomic learning operation. Memory entries use these fields:
+
+```perl
+{
+    kind   => $kind,  # 'conversation', 'teaching', or 'file'
+    text   => $text,
+    prompt => $optional_prompt,
+    source => $optional_file_path,
+    digest => $optional_content_digest,
+}
+```
+
+Every entry requires `kind` and string `text`. A teaching also requires a
+nonempty `prompt`; a file entry requires `source` and a 64-character SHA-256
+`digest`. The agent stores a user utterance as both conversation `prompt` and
+`text`, a taught answer as teaching `text`, and each source chunk as file
+`text`. The remaining fields are optional for the other kinds.
+
 ### Classification mode
 
 `train_example(...)` receives a label and a fixed-length numeric vector. Each
@@ -62,15 +114,47 @@ process easy to inspect.
 
 ### Persistence
 
-Both learning modes are saved together with Perl's `Storable` module. By
-default, `new(path => ...)` loads an existing model automatically. Training is
-additive in memory, and nothing is written until `save()` is called.
+Text counts, classifier state, and local memories are saved together with
+Perl's `Storable` module. By default, `new(path => ...)` loads an existing model
+automatically. Low-level library changes remain in memory until `save()` is
+called; the interactive agent autosaves learned operations.
 
 If an existing path is not a readable TinyLLM model, loading stops with an
 error instead of silently replacing it with a fresh model.
 
 Model files are Perl-specific and should be treated as application data, not
 as a portable exchange format. Only load model files you trust.
+
+Conversation text, taught answers, imported file excerpts, and source paths
+are stored as recoverable text inside the Storable file; they are not
+encrypted. The default `myBrainLLM.dat` is tracked by Git in this repository.
+For personal or sensitive knowledge, use an ignored path such as
+`--model=examples/alita-chat.dat`, and do not commit or share the resulting
+model file.
+
+### Saved-model size limit
+
+Every model has a default cap and hard ceiling of 4,000,000,000 serialized
+bytes: decimal 4 GB, approximately 3.73 GiB. `max_model_bytes` may set any
+positive limit up to that ceiling. A loaded model retains its saved smaller
+limit unless the caller explicitly overrides it. The cap covers the complete
+saved model, including text counts, classifier counts, conversations,
+teachings, and ingested file memories.
+
+An existing file larger than the configured cap is rejected before Storable
+deserialization. `train()`, `learn()`, and `train_example()` check the
+prospective serialized model and reject an over-cap update without retaining a
+partial change. Saving writes and checks a unique temporary file before
+replacing the destination, so a failed size check does not overwrite the prior
+model.
+
+This is a serialized-storage limit, not a Perl RAM limit or a limit on total
+temporary, backup, or filesystem space. Size checks can themselves allocate
+serialization buffers, and each checked mutation serializes the complete
+prospective snapshot, so update cost grows with the model. Perl's live hashes
+and arrays can occupy much more than the saved file; a process may run out of
+memory before approaching the 4 GB storage ceiling. The ceiling is not a
+claim that TinyLLM is a 4 GB neural language model.
 
 ### What makes a model grow
 
@@ -85,13 +169,16 @@ Text-model size grows mainly when training introduces new words or new unique
 word-to-word transitions. Repeating known text changes the stored counts but
 does not create another vocabulary or transition entry. Use `stats()` or
 `examples/model_info.pl` to inspect these quantities and the serialized size.
+Conversation, teaching, and file memories retain their text and therefore also
+contribute directly to the saved-model cap.
 
 ## Requirements
 
 TinyLLM and the examples require Perl and modules included with the standard
-Perl distribution (`File::Basename`, `File::Path`, `File::Spec`, `File::Temp`,
-`FindBin`, `Getopt::Long`, `JSON::PP`, `POSIX`, `Scalar::Util`, and `Storable`).
-No machine-learning framework is required.
+Perl distribution (`Cwd`, `Digest::SHA`, `Encode`, `Errno`, `File::Basename`,
+`File::Path`, `File::Spec`, `File::Temp`, `FindBin`, `Getopt::Long`, `JSON::PP`,
+`POSIX`, `Scalar::Util`, `Storable`, and `Time::HiRes`). No machine-learning
+framework is required.
 
 The legacy `alita.pl` experiment has separate requirements: a threaded Perl
 build and the CPAN modules `IO::Scalar` and `Term::ReadKey`.
@@ -105,40 +192,133 @@ methods are:
 
 | Method | Purpose |
 | --- | --- |
-| `TinyLLM->new(path => $file)` | Create a model and load `$file` when it exists. The default path is `myBrainLLM.dat`. |
+| `TinyLLM->new(path => $file, max_model_bytes => $bytes)` | Create a model and load `$file` when it exists. Defaults are `myBrainLLM.dat` and 4,000,000,000 bytes. A loaded saved limit is retained unless explicitly overridden; the hard ceiling cannot be exceeded. Oversized files are rejected before deserialization. |
 | `TinyLLM->new(path => $file, load => 0)` | Create a fresh model without loading an existing file at that path. A later `save()` replaces the path. |
 | `$model->train($text)` | Add one text sample to the unigram and bigram counts. |
+| `$model->learn(texts => \@strings, memories => \@entries)` | Atomically add text samples and validated memory entries. If the complete update exceeds the model cap, none of it is retained. |
+| `$model->memories()` | Return a deep copy of the stored conversation, teaching, and file-memory entries. |
 | `$model->reply(prompt => $text, max_tokens => 50, temperature => 0.9)` | Generate text from the learned bigrams and return a string. `max_tokens` must be a nonnegative integer and temperature must be finite; a nonpositive temperature falls back to `1.0`. |
 | `$model->train_example(label => $label, features => \@values, threshold => $number)` | Add one labeled numeric vector. When omitted, `threshold` inherits an existing classifier's threshold or defaults to `0.5` for a fresh classifier. An explicit mismatch is rejected. |
 | `$model->predict(features => \@values, alpha => 1)` | Return `{ label, confidence, probabilities }`. `alpha` is the positive smoothing value; confidence is normalized within the model, not calibrated accuracy. |
 | `$model->classifier_stats()` | Return `{ algorithm, feature_count, label_count, stored_feature_counts, threshold, total_examples, examples_by_label }`, or `undef` before classifier training. |
-| `$model->stats()` | Return `{ version, path, total_tokens, vocabulary_size, bigram_count, serialized_bytes, classifier }`. Tokens include sentence boundaries; vocabulary excludes `<BOS>` and `<EOS>`; bigrams count unique transitions; serialized bytes describe the current cache-free state if saved. |
-| `$model->save()` | Save text and classifier state to the model's path. Parent directories are created when needed. |
+| `$model->stats()` | Return `{ version, path, max_model_bytes, serialized_bytes, total_tokens, vocabulary_size, bigram_count, memory_count, knowledge_sources, classifier }`. Knowledge sources count unique file paths. Tokens include sentence boundaries; vocabulary excludes `<BOS>` and `<EOS>`; bigrams count unique transitions. `serialized_bytes` describes the current cache-free state if saved. |
+| `$model->save()` | Size-check and save all model state through a unique temporary file, then replace the model path. Parent directories are created when needed. |
 
 Methods beginning with an underscore are implementation details and are not
 public endpoints.
 
-## Use the text model
+`Alita::Agent` provides the higher-level recall interface:
+
+| Method | Purpose |
+| --- | --- |
+| `Alita::Agent->new(model => $model, max_file_bytes => $bytes)` | Wrap a TinyLLM model and configure the per-file ingestion limit. The default is 10 MiB and the hard maximum is 4,000,000,000 bytes. |
+| `$agent->chat($prompt)` | Retrieve a relevant taught answer, source excerpt, or recent conversation when available, then atomically learn the prompt as a conversation entry. The CLI saves it. |
+| `$agent->teach(prompt => $question, response => $answer)` | Atomically store an exact question/answer teaching and train both strings. |
+| `$agent->ingest_file($path)` | Atomically learn chunks of at most 1,500 characters from one explicitly named regular UTF-8 text file, including files with a UTF-8 BOM. Return `{ source, digest, bytes, chunks, duplicate, changed }`. It does not recurse, browse, or execute anything. |
+| `$agent->sources()` | Return a sorted array reference of `{ source, digest, chunks }` records, one per source/digest fingerprint. |
+
+Agent methods update the in-memory TinyLLM but do not call `save()` themselves.
+Call `$model->save()` in library code; `alitaLLM.pl` performs the autosaves
+described below.
+
+## Run the bundled conversation example
+
+The self-contained example teaches Alita its identity, remembers that the
+user's favorite constellation is Orion, imports the bundled fictional Lantern
+workshop notes, asks which city hosts the workshop, and saves the result:
+
+```powershell
+perl examples/conversation.pl
+```
+
+Its default model is `examples/alita-chat-demo.dat`, which is ignored by Git.
+Use `--model=PATH`, `--knowledge=PATH`, or `--max-model-bytes=N` to change the
+inputs. Repeated runs add conversation and teaching counts; importing the same
+source content again is a no-op. Run `perl examples/conversation.pl --help` for
+all options.
+
+## Use the conversation and knowledge agent
 
 Start the interactive command-line program:
 
 ```powershell
-perl alitaLLM.pl
+perl alitaLLM.pl --model=examples/alita-chat.dat
 ```
 
-Each input line is learned immediately, then used as the prompt for a reply.
+An ordinary input line asks a question. The agent first searches locally stored
+teachings, file excerpts, and recent conversation. When nothing matches, it
+gives readable guidance about `/teach` and `/read`, rather than emitting a
+random bigram reply. It records the turn only after retrieval, so the current
+question cannot match itself. Learned turns, teachings, and successful file
+reads are saved automatically. Input and output streams use UTF-8;
+whitespace-only lines are skipped.
+
+For example, teach a fact, ask the same question, import this README, and ask
+a question containing words from the imported text:
+
+```text
+/teach What color is the lab door? => The lab door is blue.
+What color is the lab door?
+/read "README.md"
+What is the default model cap?
+Tell me more.
+/sources
+/stats
+/quit
+```
+
+The exact taught question returns its saved answer. File recall uses keyword
+overlap, so wording a question with terms that occur in the source generally
+works better than an unrelated or highly abstract question. “Tell me more”
+reuses the preceding user question as retrieval context.
+
+Interactive commands are:
+
+| Command | Effect |
+| --- | --- |
+| `/teach question => answer` | Store an explicit question/answer teaching. |
+| `/read "C:\path with spaces\notes.txt"` | Read one explicitly named local text file. |
+| `/sources` | List imported source paths, digests, and chunk counts. |
+| `/stats` | Show model counts, serialized size, and configured limits. |
+| `/save` | Save immediately. |
+| `/help` | Show commands and options. |
+| `/quit` or `/exit` | Save and exit. |
+
 Press Ctrl+Z followed by Enter on Windows, or Ctrl+D on Unix-like systems, to
 send end-of-file and save. Ctrl+C also saves before exiting.
 
-Choose another model path with an argument or environment variable:
+Choose another model path with an argument or environment variable, or
+configure the model and per-file limits:
 
 ```powershell
 perl alitaLLM.pl --model=my-text-model.dat
 $env:ALITA_LLM_PATH = 'my-text-model.dat'
 perl alitaLLM.pl
+perl alitaLLM.pl --model="C:\path with spaces\brain.dat" --max-model-bytes=50000000 --max-file-bytes=1048576
 ```
 
-A minimal library example looks like this:
+Run `perl alitaLLM.pl --help` for the complete command-line help. On a fresh
+model, omitting `--max-model-bytes` uses 4,000,000,000; on an existing model it
+preserves the saved smaller cap. An explicit `--model` overrides
+`ALITA_LLM_PATH`. Both byte-limit options accept integers from 1 through
+4,000,000,000.
+
+The default per-file limit is 10 MiB. `/read` accepts one regular UTF-8 text
+file, with or without a UTF-8 BOM. Binary data, invalid UTF-8, directories, and
+oversized files are rejected. There is no directory recursion, network fetch,
+or shell-command execution.
+
+A failed atomic chat, teaching, or file import is not saved. Errors are printed
+and the session remains available, but it eventually exits with a nonzero
+status. Duplicate file reads and read-only commands such as `/stats` and
+`/sources` do not rewrite the model.
+
+The model path matters for privacy. Memories are persisted without encryption,
+and the default `myBrainLLM.dat` is tracked by Git. The example path
+`examples/alita-chat.dat` is ignored by this repository; still, do not commit
+or share a model containing sensitive conversations or imported text.
+
+A minimal low-level bigram example looks like this:
 
 ```perl
 use lib 'lib';
@@ -267,7 +447,27 @@ $model->save();
 ```
 
 TinyLLM updates counts; it does not run epochs or backpropagation. Training the
-same sentence again gives its word transitions more weight.
+same sentence again gives its word transitions more weight. `train()` checks
+the complete serialized model against `max_model_bytes` before retaining the
+change.
+
+Use `learn()` when text and memory entries must succeed or fail together:
+
+```perl
+$model->learn(
+    texts => ['Mars has two moons.'],
+    memories => [{
+        kind   => 'teaching',
+        prompt => 'How many moons does Mars have?',
+        text   => 'Mars has two moons.',
+    }],
+);
+$model->save();
+```
+
+The operation is atomic: invalid input or a model-cap violation leaves both the
+text counts and memories unchanged. `memories()` returns a deep copy, so
+changing the returned array or hashes cannot mutate the model.
 
 ### Add new labeled vectors or digit images
 

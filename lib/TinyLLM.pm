@@ -1,19 +1,26 @@
 package TinyLLM;
 use strict;
 use warnings;
-use Storable qw(nstore_fd nfreeze retrieve);
+use Storable qw(nstore_fd nfreeze retrieve dclone);
 use File::Spec;
 use File::Path qw(make_path);
 use File::Temp qw(tempfile);
 use POSIX qw(isfinite);
 use Scalar::Util qw(looks_like_number reftype);
+use Errno qw(EACCES EBUSY EPERM);
+use Time::HiRes qw(sleep);
 
-our $VERSION = '0.3';
+our $VERSION = '0.4';
+our $MAX_MODEL_BYTES = 4_000_000_000;
+our $MAX_CONVERSATION_MEMORIES = 200;
 
 sub new {
     my ($class, %args) = @_;
     my $path = $args{path} // 'myBrainLLM.dat';
     my $load = exists $args{load} ? $args{load} : 1;
+    my $limit = exists($args{max_model_bytes})
+        ? $args{max_model_bytes} : $MAX_MODEL_BYTES;
+    _validate_size_limit($limit);
 
     my $self = {
         path         => $path,
@@ -21,9 +28,15 @@ sub new {
         bigrams      => {},
         total_tokens => 0,
         version      => $VERSION,
+        max_model_bytes => 0 + $limit,
+        memories     => [],
     };
 
     if ($load && -e $path) {
+        die "Model '$path' is not a regular file\n" if !-f $path;
+        my $file_bytes = -s $path;
+        die "Model size limit exceeded before load: '$path' is $file_bytes bytes; limit is $limit bytes\n"
+            if $file_bytes > $limit;
         my $loaded = eval { retrieve($path) };
         my $load_error = $@;
         die "Failed to load model '$path': $load_error"
@@ -59,10 +72,53 @@ sub new {
     # The caller's path always wins over a path stored inside the model file.
     $self->{path} = $path;
     $self->{version} = $VERSION;
+    $self->{max_model_bytes} = 0 + $limit if exists $args{max_model_bytes};
+    $self->{memories} = _prune_conversation_memories($self->{memories});
     delete $self->{_classifier_cache};
 
     bless $self, $class;
+    $self->_assert_model_size();
     return $self;
+}
+
+sub _validate_size_limit {
+    my ($limit) = @_;
+    die "max_model_bytes must be an integer between 1 and $MAX_MODEL_BYTES (4 GB)\n"
+        if !defined($limit) || ref($limit) || $limit !~ /\A[1-9][0-9]*\z/
+        || $limit > $MAX_MODEL_BYTES;
+}
+
+sub _validate_memory {
+    my ($memory) = @_;
+    die "memory must be a hash with kind and text\n" if ref($memory) ne 'HASH';
+    my %allowed = map { $_ => 1 } qw(kind text prompt source digest);
+    die "unknown memory field '$_'\n" for grep { !$allowed{$_} } keys %{$memory};
+    die "memory kind must be conversation, teaching, or file\n"
+        if !defined($memory->{kind}) || ref($memory->{kind})
+        || $memory->{kind} !~ /\A(?:conversation|teaching|file)\z/;
+    die "memory text must be a string\n"
+        if !defined($memory->{text}) || ref($memory->{text});
+    for my $key (qw(prompt source digest)) {
+        die "memory $key must be a string\n"
+            if exists($memory->{$key}) && (!defined($memory->{$key}) || ref($memory->{$key}));
+    }
+    die "teaching memory requires a nonempty prompt\n"
+        if $memory->{kind} eq 'teaching' && !length($memory->{prompt} // '');
+    if ($memory->{kind} eq 'file') {
+        die "file memory requires a source path and SHA-256 digest\n"
+            if !length($memory->{source} // '')
+            || ($memory->{digest} // '') !~ /\A[0-9a-f]{64}\z/i;
+    }
+}
+
+sub _prune_conversation_memories {
+    my ($memories) = @_;
+    my $count = grep { $_->{kind} eq 'conversation' } @{$memories};
+    my $discard = $count - $MAX_CONVERSATION_MEMORIES;
+    return [@{$memories}] if $discard <= 0;
+    return [grep {
+        !($_->{kind} eq 'conversation' && $discard-- > 0)
+    } @{$memories}];
 }
 
 sub _validate_loaded_model {
@@ -83,6 +139,13 @@ sub _validate_loaded_model {
         || !looks_like_number($loaded->{total_tokens})
         || !isfinite(0 + $loaded->{total_tokens})
         || $loaded->{total_tokens} < 0;
+    my $metadata_valid = eval {
+        _validate_size_limit($loaded->{max_model_bytes});
+        die "memories must be an array\n" if ref($loaded->{memories}) ne 'ARRAY';
+        _validate_memory($_) for @{$loaded->{memories}};
+        1;
+    };
+    $invalid->($@ || 'invalid memory metadata') if !$metadata_valid;
 
     for my $token (keys %{$loaded->{unigrams}}) {
         my $count = $loaded->{unigrams}{$token};
@@ -143,6 +206,7 @@ sub _validate_loaded_model {
 sub save {
     my ($self) = @_;
     my $path = $self->{path};
+    $self->_assert_model_size();
 
     my ($vol, $dir, undef) = File::Spec->splitpath($path);
     my $dirpath = File::Spec->catpath($vol, $dir, '');
@@ -160,7 +224,10 @@ sub save {
         nstore_fd($self->_snapshot(), $output)
             or die "Failed to write $tmp: $!";
         close $output or die "Failed to close $tmp: $!";
-        rename $tmp, $path or die "Failed to move $tmp to $path: $!";
+        my $actual_bytes = -s $tmp;
+        die "Model size limit exceeded before save: $actual_bytes bytes; limit is $self->{max_model_bytes} bytes\n"
+            if $actual_bytes > $self->{max_model_bytes};
+        $self->_replace_model_file($tmp, $path);
         1;
     };
     if (!$saved) {
@@ -170,6 +237,22 @@ sub save {
         die $error;
     }
     return $self;
+}
+
+sub _replace_model_file {
+    my ($self, $temporary, $destination) = @_;
+    # Windows synchronization/indexing software can hold a just-written model
+    # briefly. Retry only the atomic rename, never unlink the good destination.
+    for my $attempt (1 .. 20) {
+        return 1 if rename $temporary, $destination;
+        my $error = "$!";
+        my $error_number = 0 + $!;
+        my $retryable = $^O eq 'MSWin32' && -f $destination
+            && ($error_number == EACCES || $error_number == EBUSY || $error_number == EPERM);
+        die "Failed to move $temporary to $destination: $error\n"
+            if !$retryable || $attempt == 20;
+        sleep(0.1);
+    }
 }
 
 sub _snapshot {
@@ -187,6 +270,8 @@ sub stats {
     my $vocabulary_size = scalar grep {
         $_ ne '<BOS>' && $_ ne '<EOS>'
     } keys %{$self->{unigrams}};
+    my %sources = map { $_->{source} => 1 }
+        grep { $_->{kind} eq 'file' } @{$self->{memories}};
 
     return {
         version         => $VERSION,
@@ -196,9 +281,31 @@ sub stats {
         bigram_count    => $bigram_count,
         # Storable's file representation adds the four-byte 'pst0' signature
         # to the network-order serialization returned by nfreeze.
-        serialized_bytes => length(nfreeze($self->_snapshot())) + length('pst0'),
+        serialized_bytes => $self->_serialized_bytes(),
+        max_model_bytes  => $self->{max_model_bytes},
+        memory_count     => scalar @{$self->{memories}},
+        knowledge_sources => scalar keys %sources,
         classifier       => $self->classifier_stats(),
     };
+}
+
+sub _serialized_bytes {
+    my ($self) = @_;
+    return length(nfreeze($self->_snapshot())) + length('pst0');
+}
+
+sub _assert_model_size {
+    my ($self) = @_;
+    _validate_size_limit($self->{max_model_bytes});
+    my $bytes = $self->_serialized_bytes();
+    die "Model size limit exceeded: $bytes bytes; limit is $self->{max_model_bytes} bytes. Existing knowledge preserved.\n"
+        if $bytes > $self->{max_model_bytes};
+    return $bytes;
+}
+
+sub memories {
+    my ($self) = @_;
+    return dclone($self->{memories});
 }
 
 sub _tokenize {
@@ -211,18 +318,82 @@ sub _tokenize {
 
 sub train {
     my ($self, $text) = @_;
-    my @tokens = ('<BOS>', _tokenize($text), '<EOS>');
+    return $self->learn(texts => [$text // '']);
+}
 
-    for my $i (0..$#tokens) {
-        my $tok = $tokens[$i];
-        $self->{unigrams}{$tok}++;
-        $self->{total_tokens}++;
-        if ($i > 0) {
-            my $prev = $tokens[$i-1];
-            $self->{bigrams}{$prev} ||= {};
-            $self->{bigrams}{$prev}{$tok}++;
+# Apply a whole chat turn or file import atomically. Only changed count cells
+# are journaled, avoiding a second copy of the complete model for rollback.
+sub learn {
+    my ($self, %args) = @_;
+    die "unknown learn argument '$_'\n"
+        for grep { $_ ne 'texts' && $_ ne 'memories' } keys %args;
+    my $texts = $args{texts} // [];
+    my $memories = $args{memories} // [];
+    die "texts must be an array of strings\n" if ref($texts) ne 'ARRAY';
+    die "memories must be an array of memory hashes\n" if ref($memories) ne 'ARRAY';
+    die "texts must be an array of strings\n"
+        for grep { !defined($_) || ref($_) } @{$texts};
+    _validate_memory($_) for @{$memories};
+
+    my (%unigram_delta, %bigram_delta);
+    my $token_delta = 0;
+    for my $text (@{$texts}) {
+        my @tokens = ('<BOS>', _tokenize($text), '<EOS>');
+        $token_delta += @tokens;
+        for my $i (0 .. $#tokens) {
+            $unigram_delta{$tokens[$i]}++;
+            $bigram_delta{$tokens[$i-1]}{$tokens[$i]}++ if $i;
         }
     }
+    my $old_memories = $self->{memories};
+    my $next_memories = _prune_conversation_memories([
+        @{$old_memories}, map { { %{$_} } } @{$memories},
+    ]);
+
+    my (%old_unigrams, %old_bigrams, %old_rows);
+    for my $token (keys %unigram_delta) {
+        $old_unigrams{$token} = $self->{unigrams}{$token};
+        $self->{unigrams}{$token} += $unigram_delta{$token};
+    }
+    for my $previous (keys %bigram_delta) {
+        $old_rows{$previous} = exists $self->{bigrams}{$previous};
+        $self->{bigrams}{$previous} ||= {};
+        for my $next (keys %{$bigram_delta{$previous}}) {
+            $old_bigrams{$previous}{$next} = $self->{bigrams}{$previous}{$next};
+            $self->{bigrams}{$previous}{$next} += $bigram_delta{$previous}{$next};
+        }
+    }
+    my $old_total = $self->{total_tokens};
+    $self->{total_tokens} += $token_delta;
+    $self->{memories} = $next_memories;
+    my $accepted = eval { $self->_assert_model_size(); 1 };
+    if (!$accepted) {
+        my $error = $@;
+        for my $token (keys %old_unigrams) {
+            if (defined $old_unigrams{$token}) {
+                $self->{unigrams}{$token} = $old_unigrams{$token};
+            } else {
+                delete $self->{unigrams}{$token};
+            }
+        }
+        for my $previous (keys %old_bigrams) {
+            if (!$old_rows{$previous}) {
+                delete $self->{bigrams}{$previous};
+                next;
+            }
+            for my $next (keys %{$old_bigrams{$previous}}) {
+                if (defined $old_bigrams{$previous}{$next}) {
+                    $self->{bigrams}{$previous}{$next} = $old_bigrams{$previous}{$next};
+                } else {
+                    delete $self->{bigrams}{$previous}{$next};
+                }
+            }
+        }
+        $self->{total_tokens} = $old_total;
+        $self->{memories} = $old_memories;
+        die $error;
+    }
+    return $self;
 }
 
 sub _next_dist {
@@ -306,6 +477,42 @@ sub reply {
 }
 
 sub train_example {
+    my ($self, %args) = @_;
+    my $old_classifier = $self->{classifier};
+    my $old_cache = $self->{_classifier_cache};
+    my $label = defined($args{label}) && !ref($args{label}) ? "$args{label}" : '';
+    my $old_label = $old_classifier && exists($old_classifier->{labels}{$label})
+        ? dclone($old_classifier->{labels}{$label}) : undef;
+    my $old_total = $old_classifier ? $old_classifier->{total_examples} : 0;
+    my $accepted = eval {
+        $self->_train_example_unchecked(%args);
+        $self->_assert_model_size();
+        1;
+    };
+    if (!$accepted) {
+        my $error = $@;
+        if ($old_classifier) {
+            $self->{classifier} = $old_classifier;
+            $old_classifier->{total_examples} = $old_total;
+            if ($old_label) {
+                $old_classifier->{labels}{$label} = $old_label;
+            } else {
+                delete $old_classifier->{labels}{$label};
+            }
+        } else {
+            delete $self->{classifier};
+        }
+        if ($old_cache) {
+            $self->{_classifier_cache} = $old_cache;
+        } else {
+            delete $self->{_classifier_cache};
+        }
+        die $error;
+    }
+    return $self;
+}
+
+sub _train_example_unchecked {
     my ($self, %args) = @_;
     die "train_example requires a label\n"
         if !exists($args{label}) || !defined($args{label})
@@ -525,7 +732,7 @@ __END__
 
 =head1 NAME
 
-TinyLLM - A tiny bigram text generator and supervised vector classifier
+TinyLLM - Bounded incremental text, memory, and supervised classification
 
 =head1 SYNOPSIS
 
@@ -538,6 +745,13 @@ TinyLLM - A tiny bigram text generator and supervised vector classifier
 
   my $reply = $llm->reply(prompt => "Hello", max_tokens => 40, temperature => 0.8);
   print "$reply\n";
+
+  # Alita::Agent adds conversation and explicit local-file knowledge retrieval.
+  use Alita::Agent;
+  my $alita = Alita::Agent->new(model => $llm);
+  $alita->teach(prompt => 'What is my name?', response => 'Your name is Jovan.');
+  print $alita->chat('What is my name?'), "\n";
+  $llm->save();
 
   # Supervised classification uses the same save/load mechanism.
   $llm->train_example(
@@ -553,14 +767,19 @@ TinyLLM - A tiny bigram text generator and supervised vector classifier
 
 A minimal bigram-based "tiny LLM" that can be incrementally trained from
 conversational input and persisted to the configured model path
-(C<myBrainLLM.dat> by default). It also contains a small Bernoulli naive Bayes
+(C<myBrainLLM.dat> by default). This is not a neural transformer or a general
+reasoning engine. It also contains a small Bernoulli naive Bayes
 classifier for labeled numeric feature vectors. It provides:
 
 =over 4
 
-=item * C<new(path =E<gt> $file, load =E<gt> 0|1)> to create a model, loading an existing file unless C<load> is false.
+=item * C<new(path =E<gt> $file, load =E<gt> 0|1, max_model_bytes =E<gt> $bytes)> to create a model, loading an existing file unless C<load> is false. The persisted-state limit defaults to 4,000,000,000 bytes and cannot exceed that hard ceiling. Without an explicit override, a loaded model retains its saved smaller limit.
 
 =item * C<train($text)> to update the model with new text.
+
+=item * C<learn(texts =E<gt> \@texts, memories =E<gt> \@memories)> to atomically update token counts and memory. Each memory has C<kind> (conversation, teaching, or file) and C<text>; teaching requires C<prompt>, and file requires C<source> and a SHA-256 C<digest>. The newest 200 conversation memories are retained; teaching and file records are kept. Pruning memory does not remove cumulative token counts.
+
+=item * C<memories()> to return an independent copy of the stored memory records.
 
 =item * C<reply(prompt =E<gt> $text, max_tokens =E<gt> N, temperature =E<gt> T)> to generate a response.
 
@@ -572,8 +791,14 @@ classifier for labeled numeric feature vectors. It provides:
 
 =item * C<classifier_stats()> to return classifier metadata, label example counts, and the number of stored feature counts without exposing the feature-count arrays.
 
-=item * C<stats()> to return vocabulary size, unique bigram count, total trained tokens (including boundary tokens), serialized size in bytes, and classifier metadata. Serialization excludes the prediction cache.
+=item * C<stats()> to return vocabulary size, unique bigram count, total trained tokens (including boundary tokens), serialized size in bytes, C<max_model_bytes>, C<memory_count>, C<knowledge_sources> (distinct file paths), and classifier metadata. Serialization excludes the prediction cache.
 
 =back
+
+Text, classifier, and memory updates reject changes that exceed the saved-state
+budget and roll back their changes. Saving checks the actual temporary file
+before replacing the destination. The ceiling is not a process RAM limit:
+Perl hashes, prediction caches, and serialization buffers require additional
+memory. Load only trusted Storable model files.
 
 =cut
