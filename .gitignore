@@ -1,1 +1,5 @@
 .aider*
+/digit-recognizer.zip
+/digit-recognizer/*.csv
+/examples/*.dat
+/examples/*.csv
