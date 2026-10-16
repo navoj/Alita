@@ -1,0 +1,11 @@
+Best function found (0 generations, 649 evaluations, 0s, seed 1)
+  y = sin(x)
+  NMSE = 9.995051e-25   MSE = 4.998579e-25   RMSE = 7.070063e-13   R^2 = 1.00000000
+  tree size 2, depth 1, 1 linearly scaled term(s)
+  (simplest model within 10% of the lowest error found, 9.980e-25)
+  ('/', 'log', 'sqrt' and 'exp' are protected: x/0 -> 1, log|x|, sqrt|x|, exp capped at e^100)
+
+Pareto front (size, NMSE, model):
+    1  9.9872e-01  y = 0.0471142 - 0.000875197 * x
+    2  9.9951e-25  y = sin(x)
+    4  9.9797e-25  y = 10.8699 * (sin(x) * 0.0919971)

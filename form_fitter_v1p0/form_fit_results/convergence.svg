@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="560" font-family="Arial, sans-serif" font-size="12">
+<rect width="100%" height="100%" fill="white"/>
+<line x1="80.0" y1="50" x2="80.0" y2="500" stroke="#e5e5e5"/>
+<text x="80.0" y="518" text-anchor="middle">-1</text>
+<line x1="191.2" y1="50" x2="191.2" y2="500" stroke="#e5e5e5"/>
+<text x="191.2" y="518" text-anchor="middle">-0.75</text>
+<line x1="302.5" y1="50" x2="302.5" y2="500" stroke="#e5e5e5"/>
+<text x="302.5" y="518" text-anchor="middle">-0.5</text>
+<line x1="413.8" y1="50" x2="413.8" y2="500" stroke="#e5e5e5"/>
+<text x="413.8" y="518" text-anchor="middle">-0.25</text>
+<line x1="525.0" y1="50" x2="525.0" y2="500" stroke="#e5e5e5"/>
+<text x="525.0" y="518" text-anchor="middle">0</text>
+<line x1="636.2" y1="50" x2="636.2" y2="500" stroke="#e5e5e5"/>
+<text x="636.2" y="518" text-anchor="middle">0.25</text>
+<line x1="747.5" y1="50" x2="747.5" y2="500" stroke="#e5e5e5"/>
+<text x="747.5" y="518" text-anchor="middle">0.5</text>
+<line x1="858.8" y1="50" x2="858.8" y2="500" stroke="#e5e5e5"/>
+<text x="858.8" y="518" text-anchor="middle">0.75</text>
+<line x1="970.0" y1="50" x2="970.0" y2="500" stroke="#e5e5e5"/>
+<text x="970.0" y="518" text-anchor="middle">1</text>
+<line x1="80" y1="467.9" x2="970" y2="467.9" stroke="#e5e5e5"/>
+<text x="72" y="471.9" text-anchor="end">1e-24</text>
+<line x1="80" y1="403.6" x2="970" y2="403.6" stroke="#e5e5e5"/>
+<text x="72" y="407.6" text-anchor="end">1e-20</text>
+<line x1="80" y1="339.3" x2="970" y2="339.3" stroke="#e5e5e5"/>
+<text x="72" y="343.3" text-anchor="end">1e-16</text>
+<line x1="80" y1="275.0" x2="970" y2="275.0" stroke="#e5e5e5"/>
+<text x="72" y="279" text-anchor="end">1e-12</text>
+<line x1="80" y1="210.7" x2="970" y2="210.7" stroke="#e5e5e5"/>
+<text x="72" y="214.7" text-anchor="end">1e-8</text>
+<line x1="80" y1="146.4" x2="970" y2="146.4" stroke="#e5e5e5"/>
+<text x="72" y="150.4" text-anchor="end">1e-4</text>
+<line x1="80" y1="82.1" x2="970" y2="82.1" stroke="#e5e5e5"/>
+<text x="72" y="86.1" text-anchor="end">1e0</text>
+<rect x="80" y="50" width="890" height="450" fill="none" stroke="black"/>
+<line x1="800" y1="64" x2="824" y2="64" stroke="#d62728" stroke-width="2"/>
+<text x="832" y="68">best</text>
+<line x1="800" y1="82" x2="824" y2="82" stroke="#7f7f7f" stroke-width="2"/>
+<text x="832" y="86">population median</text>
+<text x="500" y="28" text-anchor="middle" font-size="14" font-weight="bold">Convergence (normalised MSE)</text>
+<text x="525" y="545" text-anchor="middle">generation</text>
+<text x="20" y="275" text-anchor="middle" transform="rotate(-90 20 275)">NMSE</text>
+</svg>

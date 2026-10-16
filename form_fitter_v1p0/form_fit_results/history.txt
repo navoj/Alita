@@ -1,0 +1,2 @@
+# gen	best_nmse	median_nmse	best_size
+0	9.99505068808365e-25	0.998723779525899	2
