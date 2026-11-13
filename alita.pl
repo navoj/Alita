@@ -1,8 +1,11 @@
 #!/usr/bin/env perl
 
 # use strict;
+use Config;
+$Config{useithreads} or die('Recompile Perl with threads to run this program.');
 use Storable;
 use IO::Scalar;
+use Term::ReadKey;
 
 # This is an interactive learning program that builds a database
 # by communicating with people and reading on the internet. 
@@ -11,24 +14,101 @@ my ($maxMem, %memory, $i);
 my $input;
 my $output;
 my $response;
+my $lastResponse;
 my $saved;
 my $startTime;
+my $elapsedTime;
 my $endTime;
+my $randomThought;
+my $brainSize;
+my $waitTime = 1000;
+my $i;
+my ($key, $value);
+my $brainFile;
 
-%memory = ();
-if (-e 'myBrain.dat') {
+sub var_eval {
+	local *FH;
+	my $fh;
+	tie (*FH, 'IO::Scalar', \$fh);
+	$saved = select FH;
+	eval shift;
+	select $saved;
+	$fh;
+}
+
+sub timed_input {
+	my $end_time = time + shift;
+	my $string;
+	do {
+		my $key = ReadKey(1);
+		$string .= $key if defined $key;
+	} while (time < $end_time);
+	return $string;
+};
+
+sub main() {
+	if ($#ARGV == 0) {
+		my $brainType = $ARGV[0];
+		print("brainType = $brainType\n");
+	} else {
+		print "Usage: alita.pl [32|64]\n";
+		exit(0);
+	}
+
+	%memory = ();
+
+	if ($brainType <= 64) {
+		$brainFile = "myBrain32.dat";
+		print("32-bit brain\n");
+	} else {
+		$brainFile = "myBrain64.dat";
+		print("64-bit brain\n");
+	}
+
+	print("loading $brainFile...\n");
+
+if (-e $brainFile) {
 	print "Hello my name is Alita.\n";
 	%memory = %{retrieve('myBrain.dat')};
+	$brainSize = keys %memory;
 } else {
 	print "Who am I?\n";
 }
+
+$startTime = time;
 while (1) {
-	$input = <STDIN>;
+	# An infinite strange loop that will eventually blossom into consciousness.
+#	$input = <STDIN>;
+
+	$input = timed_input($timedInput); 
+
+ 	if ($input eq "") {
+		$randomThought = int(rand($brainSize));
+		$i = 0;
+		while (($key, $value) = each %memory) {
+			if ($i == $randomThought) {
+				print "Remember when you said: $key?\n";
+			}
+			$i += 1;
+		}
+	}					
+
 	if ($input =~ /quit/i) {
 		print "Saving my memories...\n";
 	 	store \%memory, 'myBrain.dat';	
 		exit 0;
 	}
+
+	if ($input =~ /simple\s*eval[\w]*/i) {
+		print "Ok go ahead...\n";
+		$response = <STDIN>;
+		eval($response);
+		if (!$@) { print "I think I got it.\n";
+		} else {
+			print "Uhhh...I don't get it!\n";
+		}
+	}
+
 	if ($input =~ /alitabraintweak/) {
 		print("Enter new key-value pair:\n");
 		print("Enter key: ");
@@ -62,14 +142,9 @@ while (1) {
 		$endTime = time;
 		$memory{$input} = [$response, $endTime - $startTime, ];
 	}
+
 }
 
-sub var_eval {
-	local *FH;
-	my $fh;
-	tie (*FH, 'IO::Scalar', \$fh);
-	$saved = select FH;
-	eval shift;
-	select $saved;
-	$fh;
-}
+} # end sub main
+
+main();
